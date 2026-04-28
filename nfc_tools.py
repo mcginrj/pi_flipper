@@ -17,7 +17,14 @@ def wait_back():
         key = D.wait_key()
         if key in ["back", "select", "shutdown"]:
             return key
+def get_tag(prompt):
+    D.show_message("NFC", [prompt, "Hold tag steady..."])
 
+    clf = nfc.ContactlessFrontend("tty:serial0")
+    tag = clf.connect(rdwr={"on-connect": lambda tag: False})
+    clf.close()
+
+    return tag
 def read_tag_info():
     tag = get_tag("Tap tag now")
 
