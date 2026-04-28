@@ -1,5 +1,6 @@
 import sys
 import os
+import time
 import binascii
 import importlib
 
@@ -17,42 +18,25 @@ def wait_back():
         key = D.wait_key()
         if key in ["back", "select", "shutdown"]:
             return key
-def get_tag(prompt):
-    D.show_message("NFC", [prompt, "Hold tag steady..."])
 
-    clf = nfc.ContactlessFrontend("tty:serial0")
-    tag = clf.connect(rdwr={"on-connect": lambda tag: False})
-    clf.close()
 
-    return tag
-def read_tag_info():
-    tag = get_tag("Tap tag now")
-
-    uid = safe_uid(tag)
-    lines = [
-        "Tag Found",
-        str(tag)[:22],
-        f"UID: {uid[:18]}",
-    ]
-
-    try:
-        ndef_obj = tag.ndef
-    except Exception:
-        ndef_obj = None
-
-    if ndef_obj:
-        lines += [
-            "NDEF: Yes",
-            f"Records: {len(ndef_obj.records)}",
-            f"Size: {ndef_obj.length}/{ndef_obj.capacity}",
-            f"Writable: {ndef_obj.is_writeable}",
-        ]
-    else:
-        lines += ["NDEF: No/Unreadable"]
-
-    lines.append("Press A")
-    D.show_message("NFC Info", lines[:9])
+def show_error(e):
+    D.show_message("NFC Error", [str(e)[:28], "Press A"], color="RED")
     wait_back()
+
+
+def get_tag(prompt):
+    D.show_message("NFC", [prompt, "Tap and hold tag"])
+    time.sleep(0.3)
+
+    clf = nfc.ContactlessFrontend(NFC_PORT)
+    try:
+        tag = clf.connect(rdwr={"on-connect": lambda tag: False})
+        time.sleep(0.2)
+        return tag
+    finally:
+        clf.close()
+        time.sleep(0.5)
 
 
 def safe_uid(tag):
@@ -63,70 +47,81 @@ def safe_uid(tag):
 
 
 def read_tag_info():
-    tag = get_tag("Tap tag now")
-
+    tag = get_tag("Read Tag Info")
     uid = safe_uid(tag)
-    lines = [
+
+    D.show_message("NFC Info", [
         "Tag Found",
         str(tag)[:22],
         f"UID: {uid[:18]}",
-    ]
-
-    if tag.ndef:
-        lines += [
-            "NDEF: Yes",
-            f"Records: {len(tag.ndef.records)}",
-            f"Size: {tag.ndef.length}/{tag.ndef.capacity}",
-            f"Writable: {tag.ndef.is_writeable}",
-        ]
-    else:
-        lines += ["NDEF: No"]
-
-    lines.append("Press A")
-    D.show_message("NFC Info", lines[:9])
+        "Press A"
+    ])
     wait_back()
 
 
 def dump_ndef():
-    tag = get_tag("Tap tag to dump")
+    tag = get_tag("Dump NDEF")
 
-    if not tag.ndef:
-        D.show_message("NDEF Dump", ["No NDEF data", "Press A"])
+    try:
+        ndef_obj = tag.ndef
+    except Exception:
+        ndef_obj = None
+
+    if not ndef_obj:
+        D.show_message("NDEF", ["No/Unreadable", "NDEF data", "Press A"])
         wait_back()
         return
 
-    records = list(tag.ndef.records)
+    lines = [
+        f"Records: {len(ndef_obj.records)}",
+        f"Size: {ndef_obj.length}/{ndef_obj.capacity}",
+    ]
 
-    if not records:
-        D.show_message("NDEF Dump", ["NDEF exists", "No records", "Press A"])
-        wait_back()
-        return
-
-    lines = []
-    for i, record in enumerate(records[:4]):
-        lines.append(f"{i+1}: {record.type[:18]}")
-        lines.append(str(record)[:22])
+    for i, record in enumerate(list(ndef_obj.records)[:3]):
+        lines.append(f"{i+1}: {record.type[:16]}")
 
     lines.append("Press A")
-    D.show_message("NDEF Dump", lines[:9])
+    D.show_message("NDEF Dump", lines[:8])
+    wait_back()
+
+
+def write_test_text():
+    tag = get_tag("Write Text Tag")
+
+    try:
+        ndef_obj = tag.ndef
+    except Exception:
+        ndef_obj = None
+
+    if not ndef_obj:
+        D.show_message("NFC Write", ["Tag has no NDEF", "Press A"])
+    elif not ndef_obj.is_writeable:
+        D.show_message("NFC Write", ["Tag not writable", "Press A"])
+    else:
+        ndef_obj.records = [ndef.TextRecord("Portable IoT Tool")]
+        D.show_message("NFC Write", ["Text written", "Press A"], color="GREEN")
+
     wait_back()
 
 
 def copy_ndef():
-    D.show_message("NFC Copy", ["Tap SOURCE tag"])
     src = get_tag("Tap SOURCE tag")
 
-    if not src.ndef:
+    try:
+        src_ndef = src.ndef
+    except Exception:
+        src_ndef = None
+
+    if not src_ndef:
         D.show_message("NFC Copy", ["Source has no", "NDEF data", "Press A"])
         wait_back()
         return
 
-    records = list(src.ndef.records)
-    src_len = src.ndef.length
+    records = list(src_ndef.records)
+    length = src_ndef.length
 
     D.show_message("NFC Copy", [
         f"Copied {len(records)} recs",
-        f"Size: {src_len}",
         "Remove source",
         "Press A"
     ])
@@ -134,47 +129,20 @@ def copy_ndef():
 
     dst = get_tag("Tap BLANK tag")
 
-    if not dst.ndef:
-        D.show_message("NFC Copy", ["Dest not NDEF", "formatted", "Press A"])
-    elif not dst.ndef.is_writeable:
-        D.show_message("NFC Copy", ["Dest not", "writable", "Press A"])
-    elif dst.ndef.capacity < src_len:
+    try:
+        dst_ndef = dst.ndef
+    except Exception:
+        dst_ndef = None
+
+    if not dst_ndef:
+        D.show_message("NFC Copy", ["Dest has no", "NDEF area", "Press A"])
+    elif not dst_ndef.is_writeable:
+        D.show_message("NFC Copy", ["Dest not writable", "Press A"])
+    elif dst_ndef.capacity < length:
         D.show_message("NFC Copy", ["Dest too small", "Press A"])
     else:
-        dst.ndef.records = records
+        dst_ndef.records = records
         D.show_message("NFC Copy", ["Write complete", "Press A"], color="GREEN")
-
-    wait_back()
-
-
-def write_test_text():
-    text = "Portable IoT Tool"
-
-    tag = get_tag("Tap blank tag")
-
-    if not tag.ndef:
-        D.show_message("NFC Write", ["Tag not NDEF", "formatted", "Press A"])
-    elif not tag.ndef.is_writeable:
-        D.show_message("NFC Write", ["Tag not writable", "Press A"])
-    else:
-        tag.ndef.records = [ndef.TextRecord(text)]
-        D.show_message("NFC Write", ["Text written", text[:20], "Press A"], color="GREEN")
-
-    wait_back()
-
-
-def write_test_url():
-    url = "https://example.com"
-
-    tag = get_tag("Tap blank tag")
-
-    if not tag.ndef:
-        D.show_message("NFC URL", ["Tag not NDEF", "formatted", "Press A"])
-    elif not tag.ndef.is_writeable:
-        D.show_message("NFC URL", ["Tag not writable", "Press A"])
-    else:
-        tag.ndef.records = [ndef.UriRecord(url)]
-        D.show_message("NFC URL", ["URL written", url[:20], "Press A"], color="GREEN")
 
     wait_back()
 
@@ -183,9 +151,8 @@ def run():
     menu = [
         "Read Tag Info",
         "Dump NDEF",
-        "Copy NDEF Tag",
+        "Copy NDEF",
         "Write Test Text",
-        "Write Test URL",
         "Back",
     ]
 
@@ -197,30 +164,24 @@ def run():
 
         if key == "up":
             selected = (selected - 1) % len(menu)
-
         elif key == "down":
             selected = (selected + 1) % len(menu)
-
         elif key == "back":
             return
-
         elif key == "select":
-            choice = menu[selected]
-
             try:
+                choice = menu[selected]
+
                 if choice == "Read Tag Info":
                     read_tag_info()
                 elif choice == "Dump NDEF":
                     dump_ndef()
-                elif choice == "Copy NDEF Tag":
+                elif choice == "Copy NDEF":
                     copy_ndef()
                 elif choice == "Write Test Text":
                     write_test_text()
-                elif choice == "Write Test URL":
-                    write_test_url()
                 elif choice == "Back":
                     return
 
             except Exception as e:
-                D.show_message("NFC Error", [str(e)[:28], "Press A"], color="RED")
-                wait_back()
+                show_error(e)
