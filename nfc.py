@@ -18,16 +18,34 @@ def wait_back():
         if key in ["back", "select", "shutdown"]:
             return key
 
-def get_tag(prompt):
-    D.show_message("NFC", [prompt, "Hold tag steady..."])
-    clf = None
+def read_tag_info():
+    tag = get_tag("Tap tag now")
+
+    uid = safe_uid(tag)
+    lines = [
+        "Tag Found",
+        str(tag)[:22],
+        f"UID: {uid[:18]}",
+    ]
+
     try:
-        clf = nfc.ContactlessFrontend(NFC_PORT)
-        tag = clf.connect(rdwr={"on-connect": lambda tag: False})
-        return tag
-    finally:
-        if clf:
-            clf.close()
+        ndef_obj = tag.ndef
+    except Exception:
+        ndef_obj = None
+
+    if ndef_obj:
+        lines += [
+            "NDEF: Yes",
+            f"Records: {len(ndef_obj.records)}",
+            f"Size: {ndef_obj.length}/{ndef_obj.capacity}",
+            f"Writable: {ndef_obj.is_writeable}",
+        ]
+    else:
+        lines += ["NDEF: No/Unreadable"]
+
+    lines.append("Press A")
+    D.show_message("NFC Info", lines[:9])
+    wait_back()
 
 
 def safe_uid(tag):
