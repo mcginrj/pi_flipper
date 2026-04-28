@@ -23,10 +23,12 @@ def wait_back():
 
 
 def scan_rtl433(label, freq, duration=30):
+    import select
+
     D.show_message("SDR Scan", [
         f"Band: {label}",
-        "Listening...",
-        "Press A to stop"
+        "A/BACK = stop",
+        "Listening..."
     ])
 
     cmd = [
@@ -41,58 +43,49 @@ def scan_rtl433(label, freq, duration=30):
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
-        text=True
+        text=True,
+        bufsize=1
     )
 
     hits = []
     deadline = time.time() + duration
 
     while time.time() < deadline:
-        key = None
-
-        # Check stop button
+        # Check buttons
         try:
-            import RPi.GPIO as GPIO
-            if not GPIO.input(D.KEY_A):
+            key = D.wait_key_nonblock()   # if your display.py has this
+            if key in ["select", "back", "shutdown"]:
                 break
-        except Exception:
+        except:
             pass
 
-        line = proc.stdout.readline()
+        # Non-blocking stdout check
+        ready, _, _ = select.select([proc.stdout], [], [], 0.1)
 
-        if line:
-            try:
-                data = json.loads(line)
+        if ready:
+            line = proc.stdout.readline()
 
-                model = str(data.get("model", "Unknown"))
-                ident = str(data.get("id", ""))
-                channel = str(data.get("channel", ""))
-                battery = str(data.get("battery_ok", ""))
+            if line:
+                try:
+                    data = json.loads(line)
 
-                label_text = f"{model} {ident}".strip()
-                if channel:
-                    label_text += f" Ch{channel}"
-                if battery:
-                    label_text += f" B:{battery}"
+                    model = str(data.get("model", "Unknown"))
+                    ident = str(data.get("id", ""))
+                    txt = f"{model} {ident}".strip()
 
-                if label_text not in hits:
-                    hits.append(label_text[:35])
+                    if txt not in hits:
+                        hits.append(txt[:35])
 
-            except Exception:
-                pass
-
-        time.sleep(0.05)
+                except:
+                    pass
 
     proc.terminate()
 
     if hits:
-        save_hits(label, freq, hits)
         show_hits(label, hits)
     else:
         D.show_message("SDR", [
-            f"No hits on {label}",
-            "Try pressing remote",
-            "or wait longer",
+            "No hits found",
             "Press A"
         ])
         wait_back()
