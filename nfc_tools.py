@@ -213,23 +213,14 @@ def copy_ndef():
 
 
 def read_raw_pages(tag, start_page=RAW_START_PAGE, end_page=RAW_END_PAGE):
-    """
-    Reads Type 2 tag pages.
-    nfcpy tag.read(page) returns 16 bytes = 4 pages at once.
-    We split that into individual 4-byte pages.
-    """
     pages = {}
 
-    page = start_page
-    while page <= end_page:
-        block = tag.read(page)
-
-        for offset in range(0, 16, 4):
-            page_num = page + (offset // 4)
-            if page_num <= end_page:
-                pages[page_num] = bytes(block[offset:offset + 4])
-
-        page += 4
+    for page in range(start_page, end_page + 1):
+        try:
+            block = tag.read(page)
+            pages[page] = bytes(block[:4])
+        except Exception:
+            pass
 
     return pages
 
