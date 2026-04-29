@@ -24,10 +24,11 @@ def wait_back():
 
 def scan_rtl433(label, freq, duration=30):
     import select
+    import RPi.GPIO as GPIO
 
     D.show_message("SDR Scan", [
         f"Band: {label}",
-        "A/BACK = stop",
+        "A = stop",
         "Listening..."
     ])
 
@@ -51,15 +52,10 @@ def scan_rtl433(label, freq, duration=30):
     deadline = time.time() + duration
 
     while time.time() < deadline:
-        # Check buttons
-        try:
-            key = D.wait_key_nonblock()   # if your display.py has this
-            if key in ["select", "back", "shutdown"]:
-                break
-        except:
-            pass
+        # A button = back button on your display.py
+        if not GPIO.input(D.KEY_A):
+            break
 
-        # Non-blocking stdout check
         ready, _, _ = select.select([proc.stdout], [], [], 0.1)
 
         if ready:
@@ -68,28 +64,26 @@ def scan_rtl433(label, freq, duration=30):
             if line:
                 try:
                     data = json.loads(line)
-
                     model = str(data.get("model", "Unknown"))
                     ident = str(data.get("id", ""))
-                    txt = f"{model} {ident}".strip()
+                    label_text = f"{model} {ident}".strip()
 
-                    if txt not in hits:
-                        hits.append(txt[:35])
-
-                except:
+                    if label_text not in hits:
+                        hits.append(label_text[:35])
+                except Exception:
                     pass
 
     proc.terminate()
 
     if hits:
+        save_hits(label, freq, hits)
         show_hits(label, hits)
     else:
         D.show_message("SDR", [
-            "No hits found",
+            f"No hits on {label}",
             "Press A"
         ])
         wait_back()
-
 
 def show_hits(title, hits):
     selected = 0
