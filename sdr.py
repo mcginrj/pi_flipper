@@ -50,13 +50,13 @@ def save_result(entry):
 
 
 def rtl_test_screen():
-    D.show_message("SDR Test", ["Checking dongle...", "Please wait"])
+    D.show_message("SDR Test", ["Checking RTL-SDR", "Please wait"])
 
     out = subprocess.getoutput("rtl_test -t")
     lines = []
 
     for line in out.splitlines():
-        if "Found" in line or "NooElec" in line or "Realtek" in line or "Rafael" in line:
+        if "Found" in line or "Realtek" in line or "Rafael" in line or "NooElec" in line:
             lines.append(line[:24])
 
     if not lines:
@@ -68,22 +68,22 @@ def rtl_test_screen():
 
 
 def fm_power_test():
-    D.show_message("FM Test", ["Scanning FM band", "88-108 MHz..."])
+    D.show_message("FM Test", ["Checking RF input", "88-108 MHz"])
 
     subprocess.getoutput("rm -f /tmp/fm_scan.csv")
     subprocess.getoutput("rtl_power -f 88M:108M:200k -i 1 -e 10s /tmp/fm_scan.csv")
     out = subprocess.getoutput("tail -1 /tmp/fm_scan.csv")
 
     if out.strip():
-        D.show_message("FM Test", ["FM data found", "SDR working", "Press A"], color="GREEN")
+        D.show_message("FM Test", ["FM energy found", "SDR is working", "Press A"], color="GREEN")
     else:
         D.show_message("FM Test", ["No FM data", "Check antenna", "Press A"], color="RED")
 
     wait_back()
 
 
-def decode_band(label, freq_json, duration=30):
-    D.show_message(f"Decode {label}", ["Known devices", "A = stop", "Listening..."])
+def decode_band(label, freq_json, duration=25):
+    D.show_message(f"Decode {label}", ["Known protocols", "Listening...", "A = stop"])
 
     proc = subprocess.Popen(
         ["rtl_433", "-f", freq_json, "-R", "0", "-M", "newmodel", "-F", "json"],
@@ -127,20 +127,21 @@ def decode_band(label, freq_json, duration=30):
 
     save_result({
         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "mode": f"decode_{label}",
+        "band": label,
+        "mode": "decode",
         "hits": hits
     })
 
     if hits:
         D.show_message(f"Decoded {label}", hits[:7] + ["Press A"], color="GREEN")
     else:
-        D.show_message(f"Decode {label}", ["No known devices", "Try Analyze mode", "Press A"])
+        D.show_message(f"Decode {label}", ["No known protocol", "Use Monitor mode", "Press A"])
 
     wait_back()
 
 
-def analyze_band(label, freq_a, duration=20):
-    D.show_message(f"Analyze {label}", ["Raw RF detect", "A = stop", "Press remote"])
+def monitor_band(label, freq_a, duration=25):
+    D.show_message(f"Monitor {label}", ["Passive RF scan", "Listening...", "A = stop"])
 
     proc = subprocess.Popen(
         ["rtl_433", "-f", freq_a, "-A"],
@@ -150,11 +151,12 @@ def analyze_band(label, freq_a, duration=20):
         bufsize=1
     )
 
-    packets = 0
+    bursts = 0
     rssi = "?"
     noise = "?"
     offset = "?"
     modulation = "Unknown"
+    package_type = "Unknown"
 
     deadline = time.time() + duration
 
@@ -171,8 +173,13 @@ def analyze_band(label, freq_a, duration=20):
 
             line = line.strip()
 
-            if "Detected OOK package" in line or "Detected FSK package" in line:
-                packets += 1
+            if "Detected OOK package" in line:
+                bursts += 1
+                package_type = "OOK"
+
+            elif "Detected FSK package" in line:
+                bursts += 1
+                package_type = "FSK"
 
             if "RSSI:" in line:
                 m = re.search(r"RSSI:\s*([-0-9.]+)", line)
@@ -192,43 +199,46 @@ def analyze_band(label, freq_a, duration=20):
     proc.terminate()
 
     lines = [
-        "RF Activity Found" if packets > 0 else "No RF bursts",
-        f"Bursts: {packets}",
+        "RF Activity Found" if bursts > 0 else "No RF bursts",
+        f"Band: {label} MHz",
+        f"Bursts: {bursts}",
         f"RSSI: {rssi}",
         f"Noise: {noise}",
-        f"Offset: {offset}",
+        f"Type: {package_type}",
         f"Mod: {modulation}",
         "Press A",
     ]
 
     save_result({
         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "mode": f"analyze_{label}",
-        "bursts": packets,
+        "band": label,
+        "mode": "monitor",
+        "bursts": bursts,
         "rssi": rssi,
         "noise": noise,
         "offset": offset,
+        "package_type": package_type,
         "modulation": modulation
     })
 
-    D.show_message(f"{label} Analysis", lines[:8], color="GREEN" if packets > 0 else "RED")
+    D.show_message(f"{label} Monitor", lines[:8], color="GREEN" if bursts > 0 else "RED")
     wait_back()
 
 
-def demo_scan_band(label, freq_a, freq_json):
-    D.show_message(f"Demo {label}", ["Decode + raw", "A = stop", "Press remote"])
+def survey_band(label, freq_a, freq_json):
+    D.show_message(f"Survey {label}", ["Decode + RF scan", "Listening...", "A = stop"])
 
     decoded = []
 
     proc = subprocess.Popen(
-        ["rtl_433", "-f", freq_json, "-R", "0", "-F", "json"],
+        ["rtl_433", "-f", freq_json, "-R", "0", "-M", "newmodel", "-F", "json"],
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         text=True,
         bufsize=1
     )
 
-    deadline = time.time() + 10
+    deadline = time.time() + 8
 
     while time.time() < deadline:
         if stop_pressed():
@@ -251,6 +261,7 @@ def demo_scan_band(label, freq_a, freq_json):
 
     bursts = 0
     rssi = "?"
+    package_type = "Unknown"
 
     proc = subprocess.Popen(
         ["rtl_433", "-f", freq_a, "-A"],
@@ -260,7 +271,7 @@ def demo_scan_band(label, freq_a, freq_json):
         bufsize=1
     )
 
-    deadline = time.time() + 10
+    deadline = time.time() + 12
 
     while time.time() < deadline:
         if stop_pressed():
@@ -273,8 +284,13 @@ def demo_scan_band(label, freq_a, freq_json):
             if not line:
                 continue
 
-            if "Detected OOK package" in line or "Detected FSK package" in line:
+            if "Detected OOK package" in line:
                 bursts += 1
+                package_type = "OOK"
+
+            elif "Detected FSK package" in line:
+                bursts += 1
+                package_type = "FSK"
 
             if "RSSI:" in line:
                 m = re.search(r"RSSI:\s*([-0-9.]+)", line)
@@ -283,31 +299,35 @@ def demo_scan_band(label, freq_a, freq_json):
 
     proc.terminate()
 
+    if decoded:
+        status = decoded[0]
+    elif bursts > 0:
+        status = "Unknown RF device"
+    else:
+        status = "No activity"
+
     lines = [
-        f"{label} MHz Results",
+        f"{label} MHz Survey",
         f"Decoded: {len(decoded)}",
         f"Raw bursts: {bursts}",
         f"RSSI: {rssi}",
+        f"Type: {package_type}",
+        status[:20],
+        "Press A",
     ]
-
-    if decoded:
-        lines.append(decoded[0])
-    elif bursts > 0:
-        lines.append("Unknown RF device")
-    else:
-        lines.append("No activity found")
-
-    lines.append("Press A")
 
     save_result({
         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "mode": f"demo_{label}",
+        "band": label,
+        "mode": "survey",
         "decoded": decoded,
         "raw_bursts": bursts,
-        "rssi": rssi
+        "rssi": rssi,
+        "package_type": package_type,
+        "status": status
     })
 
-    D.show_message(f"SDR Demo {label}", lines[:8], color="GREEN" if bursts or decoded else "RED")
+    D.show_message(f"{label} Survey", lines[:8], color="GREEN" if decoded or bursts > 0 else "RED")
     wait_back()
 
 
@@ -333,6 +353,7 @@ def view_saved():
     last = data[-1]
     lines = [
         last.get("time", "")[11:19],
+        f"Band: {last.get('band', '?')}",
         f"Mode: {last.get('mode', '?')}",
     ]
 
@@ -342,6 +363,8 @@ def view_saved():
         lines.append(f"Bursts: {last['bursts']}")
     if "rssi" in last:
         lines.append(f"RSSI: {last['rssi']}")
+    if "package_type" in last:
+        lines.append(f"Type: {last['package_type']}")
     if "hits" in last:
         lines.append(f"Hits: {len(last['hits'])}")
 
@@ -363,9 +386,9 @@ def clear_logs():
 
 def band_menu(label, freq_a, freq_json):
     menu = [
+        f"Survey {label}",
+        f"Monitor {label}",
         f"Decode {label}",
-        f"Analyze {label}",
-        f"Demo Scan {label}",
         "Back",
     ]
 
@@ -387,14 +410,14 @@ def band_menu(label, freq_a, freq_json):
         elif key == "select":
             choice = menu[selected]
 
-            if choice.startswith("Decode"):
+            if choice.startswith("Survey"):
+                survey_band(label, freq_a, freq_json)
+
+            elif choice.startswith("Monitor"):
+                monitor_band(label, freq_a)
+
+            elif choice.startswith("Decode"):
                 decode_band(label, freq_json)
-
-            elif choice.startswith("Analyze"):
-                analyze_band(label, freq_a)
-
-            elif choice.startswith("Demo"):
-                demo_scan_band(label, freq_a, freq_json)
 
             elif choice == "Back":
                 return
