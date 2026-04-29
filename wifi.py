@@ -265,26 +265,33 @@ def network_list(networks):
         return
 
     selected = 0
+    per_page = 6
 
     while True:
-        labels = []
-        for n in networks:
-            ssid = n["ssid"][:12] if n["ssid"] else "Hidden"
-            labels.append(f"{ssid} {n['signal']} {n['channel']}")
+        start = (selected // per_page) * per_page
+        end = start + per_page
+        visible = networks[start:end]
 
-        D.draw_screen("Networks", labels, selected)
+        labels = []
+
+        for n in visible:
+            ssid = n["ssid"][:12] if n["ssid"] else "Hidden"
+            labels.append(f"{ssid} {n['signal']} Ch{n['channel']}")
+
+        D.draw_screen("Networks", labels, selected - start)
 
         key = D.wait_key()
 
         if key == "up":
-            selected = (selected - 1) % len(labels)
+            selected = (selected - 1) % len(networks)
+
         elif key == "down":
-            selected = (selected + 1) % len(labels)
+            selected = (selected + 1) % len(networks)
+
         elif key == "select":
             show_network_detail(networks[selected])
-        elif key == "back":
-            return
-        elif key == "shutdown":
+
+        elif key in ["back", "shutdown"]:
             return
 
 
