@@ -121,13 +121,16 @@ def main():
     splash_screen()
 
     while True:
-        labels = [label for label, _ in MAIN_MENU]
+        per_page = 6
+        start = (selected // per_page) * per_page
+        visible_menu = MAIN_MENU[start:start + per_page]
 
-        # Battery is intentionally -1 so display.py can show N/A or ignore it.
+        labels = [label for label, _ in visible_menu]
+
         bat = -1
 
-        D.draw_screen("Pi Flipper", labels, selected, bat)
-
+        D.draw_screen("Pi Flipper", labels, selected - start, bat)
+        
         key = D.wait_key()
 
         if key == "up":
