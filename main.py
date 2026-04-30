@@ -104,14 +104,14 @@ def shutdown_confirm():
 
 
 MAIN_MENU = [
-    ("[SDR] SDR Scanner", sdr.run),
-    ("[NFC] NFC Reader", nfc_tools.run),
-    ("[IR] IR Remote", ir.run),
-    ("[WiFi] WiFi Scanner", wifi.run),
-    ("[INFO] About Device", about_device),
-    ("[BAT] Battery Info", battery_info),
-    ("[SYS] System Info", system_info),
-    ("[PWR] Shutdown", None),
+    ("- SDR Scanner", sdr.run),
+    ("- NFC Reader", nfc_tools.run),
+    ("- IR Remote", ir.run),
+    ("- WiFi Scanner", wifi.run),
+    ("- About Device", about_device),
+    ("- Battery Info", battery_info),
+    ("- System Info", system_info),
+    ("- Shutdown", None),
 ]
 
 
