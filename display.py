@@ -1,4 +1,4 @@
-from waveshare_LCD import LCD_1inch3
+import ST7789
 from PIL import Image, ImageDraw, ImageFont
 import RPi.GPIO as GPIO
 
@@ -12,9 +12,10 @@ KEY_A     = 21   # Back
 KEY_B     = 20   # Select/Launch
 KEY_C     = 16   # Shutdown
 
-disp = LCD_1inch3.LCD_1inch3()
+disp = ST7789.ST7789()
 disp.Init()
 disp.clear()
+disp.bl_DutyCycle(100)
 
 GPIO.setmode(GPIO.BCM)
 for pin in [KEY_UP,KEY_DOWN,KEY_LEFT,KEY_RIGHT,KEY_PRESS,KEY_A,KEY_B,KEY_C]:
@@ -44,7 +45,7 @@ def draw_screen(title, items, selected, battery_pct=-1):
     # Footer hint
     draw.text((4, 220), "Joy=nav  B=select  A=back", fill="#555555")
 
-    disp.ShowImage(img)
+    disp.ShowImage(img.rotate(270))
 
 def show_message(title, lines, color="WHITE"):
     """Show a simple message screen."""
@@ -54,15 +55,58 @@ def show_message(title, lines, color="WHITE"):
     draw.text((8, 6), title, fill="WHITE")
     for i, line in enumerate(lines):
         draw.text((8, 40 + i * 22), str(line), fill=color)
-    disp.ShowImage(img)
+    disp.ShowImage(img.rotate(270))
 
 def wait_key():
-    """Block until a key is pressed, return which one."""
     import time
+
     while True:
-        if not GPIO.input(KEY_UP):    return 'up'
-        if not GPIO.input(KEY_DOWN):  return 'down'
-        if not GPIO.input(KEY_B):     return 'select'
-        if not GPIO.input(KEY_A):     return 'back'
-        if not GPIO.input(KEY_C):     return 'shutdown'
-        time.sleep(0.05)
+        if not GPIO.input(KEY_UP):
+            while not GPIO.input(KEY_UP):
+                time.sleep(0.01)
+            time.sleep(0.08)
+            return "up"
+
+        if not GPIO.input(KEY_DOWN):
+            while not GPIO.input(KEY_DOWN):
+                time.sleep(0.01)
+            time.sleep(0.08)
+            return "down"
+
+        if not GPIO.input(KEY_LEFT):
+            while not GPIO.input(KEY_LEFT):
+                time.sleep(0.01)
+            time.sleep(0.08)
+            return "back"
+
+        if not GPIO.input(KEY_RIGHT):
+            while not GPIO.input(KEY_RIGHT):
+                time.sleep(0.01)
+            time.sleep(0.08)
+            return "select"
+
+        if not GPIO.input(KEY_PRESS):
+            while not GPIO.input(KEY_PRESS):
+                time.sleep(0.01)
+            time.sleep(0.08)
+            return "select"
+
+        if not GPIO.input(KEY_A):
+            while not GPIO.input(KEY_A):
+                time.sleep(0.01)
+            time.sleep(0.08)
+            return "back"
+
+        if not GPIO.input(KEY_B):
+            while not GPIO.input(KEY_B):
+                time.sleep(0.01)
+            time.sleep(0.08)
+            return "select"
+
+        if not GPIO.input(KEY_C):
+            while not GPIO.input(KEY_C):
+                time.sleep(0.01)
+            time.sleep(0.08)
+            return "shutdown"
+
+        time.sleep(0.03)
