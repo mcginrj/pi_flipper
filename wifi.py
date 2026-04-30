@@ -144,19 +144,21 @@ def parse_network_block(mac, block):
 
 def scan_networks():
     D.show_message("WiFi", ["Scanning...", "Please wait"])
-    raw = run_cmd("nmcli -t -f SSID,BSSID,CHAN,SIGNAL,SECURITY dev wifi list")
+
+    raw = run_cmd("nmcli -t --separator '|' -f SSID,BSSID,CHAN,SIGNAL,SECURITY dev wifi list")
     networks = []
 
     for line in raw.splitlines():
-        parts = line.split(":")
+        parts = line.split("|")
+
         if len(parts) < 5:
             continue
 
-        ssid = parts[0] if parts[0] else "Hidden"
-        mac = parts[1]
-        channel = parts[2]
-        signal_pct = parts[3]
-        security = parts[4] if parts[4] else "Open"
+        ssid = parts[0].strip() if parts[0].strip() else "Hidden"
+        mac = parts[1].strip()
+        channel = parts[2].strip()
+        signal_pct = parts[3].strip()
+        security = parts[4].strip() if parts[4].strip() else "Open"
 
         try:
             signal = int(signal_pct)
@@ -177,7 +179,6 @@ def scan_networks():
 
     return sorted(networks, key=lambda x: x["signal"], reverse=True)
 
-
 def wait_back():
     while True:
         key = D.wait_key()
@@ -188,7 +189,7 @@ def wait_back():
 def show_network_detail(n):
     D.show_message("WiFi Detail", [
         f"SSID: {n['ssid'][:20]}",
-        f"Sig: {n['signal']} dBm",
+        f"Sig: {n['signal']}%",
         f"Rate: {n['quality']}",
         f"Ch: {n['channel']} {n['band']}",
         f"Sec: {n['security']}",
