@@ -1,8 +1,8 @@
 # modules/ir.py
+
 import os
 import json
 import time
-import math
 import subprocess
 
 import RPi.GPIO as GPIO
@@ -13,16 +13,21 @@ IR_RX = 17
 IR_TX = 18
 
 DB = os.path.expanduser("~/pi_flipper/data/ir_codes.json")
+
 CARRIER_HZ = 38000
 DUTY_CYCLE = 0.33
 
 MIN_PULSES_TO_SAVE = 12
 MAX_CAPTURE_SECONDS = 6
-CAPTURE_END_GAP_SECONDS = 0.15
+CAPTURE_END_GAP_SECONDS = 0.18
+
+# Keep this low so pigpio does not get overloaded.
+MAX_WAVE_PULSES = 9000
 
 
 def ensure_db():
     os.makedirs(os.path.dirname(DB), exist_ok=True)
+
     if not os.path.exists(DB):
         with open(DB, "w") as f:
             json.dump({}, f, indent=2)
@@ -30,15 +35,23 @@ def ensure_db():
 
 def load_db():
     ensure_db()
+
     try:
         with open(DB, "r") as f:
-            return json.load(f)
+            data = json.load(f)
+
+        if isinstance(data, dict):
+            return data
+
     except Exception:
-        return {}
+        pass
+
+    return {}
 
 
 def save_db(db):
     ensure_db()
+
     with open(DB, "w") as f:
         json.dump(db, f, indent=2)
 
@@ -46,6 +59,7 @@ def save_db(db):
 def wait_back():
     while True:
         key = D.wait_key()
+
         if key in ["back", "select", "shutdown"]:
             return key
 
@@ -55,27 +69,27 @@ def show_error(title, err):
     wait_back()
 
 
-def pigpio_ready():
-    pi = pigpio.pi()
-    if not pi.connected:
-        return None
-    return pi
-
-
 def start_pigpio_if_needed():
-    pi = pigpio_ready()
-    if pi:
+    pi = pigpio.pi()
+
+    if pi.connected:
         pi.stop()
         return True
 
     try:
-        subprocess.run(["sudo", "systemctl", "start", "pigpiod"], timeout=5)
+        subprocess.run(
+            ["sudo", "systemctl", "start", "pigpiod"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5
+        )
         time.sleep(0.5)
     except Exception:
         pass
 
-    pi = pigpio_ready()
-    if pi:
+    pi = pigpio.pi()
+
+    if pi.connected:
         pi.stop()
         return True
 
@@ -86,17 +100,23 @@ def normalize_pulses(pulses):
     clean = []
 
     for item in pulses:
+        if not isinstance(item, (list, tuple)):
+            continue
+
         if len(item) != 2:
             continue
 
-        state = int(item[0])
-        dur = int(item[1])
+        try:
+            state = int(item[0])
+            dur = int(item[1])
+        except Exception:
+            continue
 
-        # Skip tiny noise
+        # Filter tiny glitches.
         if dur < 80:
             continue
 
-        # Cap weird long gaps
+        # Cap extremely long gaps.
         if dur > 200000:
             dur = 200000
 
@@ -106,26 +126,32 @@ def normalize_pulses(pulses):
 
 
 def total_duration_ms(pulses):
-    return int(sum(int(p[1]) for p in pulses) / 1000)
+    try:
+        return int(sum(int(p[1]) for p in pulses) / 1000)
+    except Exception:
+        return 0
 
 
 def next_code_name(db):
     i = 1
+
     while f"code_{i}" in db:
         i += 1
+
     return f"code_{i}"
 
 
 def capture_pulses():
     GPIO.setmode(GPIO.BCM)
+    GPIO.setwarnings(False)
     GPIO.setup(IR_RX, GPIO.IN)
 
     pulses = []
+
     last_state = GPIO.input(IR_RX)
     last_time = time.time()
 
-    start_time = time.time()
-    deadline = start_time + MAX_CAPTURE_SECONDS
+    deadline = time.time() + MAX_CAPTURE_SECONDS
     saw_signal = False
 
     while time.time() < deadline:
@@ -179,9 +205,9 @@ def learn_code():
         "name": name,
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "carrier_hz": CARRIER_HZ,
-        "pulses": pulses,
         "pulse_count": len(pulses),
         "duration_ms": total_duration_ms(pulses),
+        "pulses": pulses
     }
 
     save_db(db)
@@ -192,40 +218,45 @@ def learn_code():
         f"Len: {total_duration_ms(pulses)}ms",
         "Press A"
     ], color="GREEN")
+
     wait_back()
 
 
-def carrier_wave_pulses(gpio, duration_us):
+def carrier_pulses(duration_us):
     """
-    Create pigpio pulses for a 38kHz carrier during one IR mark.
+    Build 38 kHz carrier pulses for a mark period.
     """
     period = int(1_000_000 / CARRIER_HZ)
     on_time = max(1, int(period * DUTY_CYCLE))
     off_time = max(1, period - on_time)
 
-    pulses = []
     cycles = max(1, int(duration_us / period))
 
+    pulses = []
+
     for _ in range(cycles):
-        pulses.append(pigpio.pulse(1 << gpio, 0, on_time))
-        pulses.append(pigpio.pulse(0, 1 << gpio, off_time))
+        pulses.append(pigpio.pulse(1 << IR_TX, 0, on_time))
+        pulses.append(pigpio.pulse(0, 1 << IR_TX, off_time))
 
     return pulses
 
 
 def build_wave_from_code(code):
-    raw = code.get("pulses", code if isinstance(code, list) else [])
+    raw = code.get("pulses", [])
     pulses = normalize_pulses(raw)
 
     wave = []
 
     for state, dur in pulses:
-        # VS1838B output is usually active-low:
-        # state 0 means IR carrier was present from the remote.
+        # VS1838B receiver output is normally active-low.
+        # state 0 usually means IR carrier was present.
         if int(state) == 0:
-            wave.extend(carrier_wave_pulses(IR_TX, int(dur)))
+            wave.extend(carrier_pulses(int(dur)))
         else:
             wave.append(pigpio.pulse(0, 1 << IR_TX, int(dur)))
+
+        if len(wave) > MAX_WAVE_PULSES:
+            raise RuntimeError("IR code too large")
 
     return wave
 
@@ -241,13 +272,17 @@ def transmit_code(name, repeat=1):
     if not start_pigpio_if_needed():
         D.show_message("pigpio Error", [
             "pigpiod not running",
-            "sudo systemctl",
-            "start pigpiod"
+            "Press A"
         ], color="RED")
         wait_back()
         return
 
     pi = pigpio.pi()
+
+    if not pi.connected:
+        D.show_message("pigpio Error", ["No connection", "Press A"], color="RED")
+        wait_back()
+        return
 
     try:
         pi.set_mode(IR_TX, pigpio.OUTPUT)
@@ -256,7 +291,7 @@ def transmit_code(name, repeat=1):
         wave = build_wave_from_code(db[name])
 
         if not wave:
-            D.show_message("IR Error", ["No pulse data", "Press A"], color="RED")
+            D.show_message("IR Error", ["Empty signal", "Press A"], color="RED")
             wait_back()
             return
 
@@ -265,15 +300,15 @@ def transmit_code(name, repeat=1):
         wid = pi.wave_create()
 
         if wid < 0:
-            D.show_message("IR Error", ["Wave create failed", "Press A"], color="RED")
-            wait_back()
-            return
+            raise RuntimeError(f"wave_create {wid}")
 
         for _ in range(repeat):
             pi.wave_send_once(wid)
+
             while pi.wave_tx_busy():
                 time.sleep(0.001)
-            time.sleep(0.08)
+
+            time.sleep(0.09)
 
         pi.wave_delete(wid)
 
@@ -282,6 +317,7 @@ def transmit_code(name, repeat=1):
             f"Repeat: {repeat}",
             "Press A"
         ], color="GREEN")
+
         wait_back()
 
     except Exception as e:
@@ -289,16 +325,120 @@ def transmit_code(name, repeat=1):
 
     finally:
         try:
+            pi.wave_clear()
             pi.write(IR_TX, 0)
             pi.stop()
         except Exception:
             pass
 
 
-def send_menu(name):
+def test_ir_led():
+    """
+    Simple safe LED test.
+    Uses hardware PWM briefly so pigpio does not get overloaded with a huge wave.
+    """
+    if not start_pigpio_if_needed():
+        D.show_message("pigpio Error", [
+            "pigpiod not running",
+            "Press A"
+        ], color="RED")
+        wait_back()
+        return
+
+    D.show_message("IR LED Test", [
+        "Use phone camera",
+        "Look for blinking",
+        "Testing..."
+    ])
+
+    pi = pigpio.pi()
+
+    if not pi.connected:
+        D.show_message("pigpio Error", ["No connection", "Press A"], color="RED")
+        wait_back()
+        return
+
+    try:
+        pi.set_mode(IR_TX, pigpio.OUTPUT)
+        pi.write(IR_TX, 0)
+
+        # Blink 38 kHz carrier in short bursts.
+        # 330000 duty = about 33%.
+        for _ in range(8):
+            pi.hardware_PWM(IR_TX, CARRIER_HZ, 330000)
+            time.sleep(0.08)
+            pi.hardware_PWM(IR_TX, 0, 0)
+            pi.write(IR_TX, 0)
+            time.sleep(0.08)
+
+        D.show_message("IR LED Test", [
+            "Test complete",
+            "Check camera",
+            "for blinking",
+            "Press A"
+        ], color="GREEN")
+
+        wait_back()
+
+    except Exception as e:
+        show_error("LED Test Error", e)
+
+    finally:
+        try:
+            pi.hardware_PWM(IR_TX, 0, 0)
+            pi.write(IR_TX, 0)
+            pi.stop()
+        except Exception:
+            pass
+
+
+def delete_code(name):
+    db = load_db()
+
+    if name in db:
+        del db[name]
+        save_db(db)
+
+        D.show_message("Deleted", [
+            name[:20],
+            "Press A"
+        ], color="GREEN")
+    else:
+        D.show_message("Delete", [
+            "Code not found",
+            "Press A"
+        ], color="RED")
+
+    wait_back()
+
+
+def view_code_info(name):
+    db = load_db()
+    code = db.get(name)
+
+    if not code:
+        D.show_message("IR Info", ["Code not found", "Press A"], color="RED")
+        wait_back()
+        return
+
+    pulses = code.get("pulses", [])
+
+    D.show_message("IR Info", [
+        name[:20],
+        f"Pulses: {len(pulses)}",
+        f"Len: {total_duration_ms(pulses)}ms",
+        f"Carrier: {code.get('carrier_hz', CARRIER_HZ)}",
+        "Press A"
+    ])
+
+    wait_back()
+
+
+def code_action_menu(name):
     menu = [
         "Send Once",
         "Send 3 Times",
+        "Code Info",
         "Delete Code",
         "Back",
     ]
@@ -327,6 +467,9 @@ def send_menu(name):
             elif choice == "Send 3 Times":
                 transmit_code(name, repeat=3)
 
+            elif choice == "Code Info":
+                view_code_info(name)
+
             elif choice == "Delete Code":
                 delete_code(name)
                 return
@@ -335,101 +478,11 @@ def send_menu(name):
                 return
 
 
-def delete_code(name):
-    db = load_db()
-
-    if name in db:
-        del db[name]
-        save_db(db)
-        D.show_message("Deleted", [name[:20], "Press A"], color="GREEN")
-    else:
-        D.show_message("Delete", ["Code not found", "Press A"], color="RED")
-
-    wait_back()
-
-
-def test_ir_led():
-    if not start_pigpio_if_needed():
-        D.show_message("pigpio Error", [
-            "pigpiod not running",
-            "Press A"
-        ], color="RED")
-        wait_back()
-        return
-
-    D.show_message("IR LED Test", [
-        "Use phone camera",
-        "Look for blinking",
-        "Testing..."
-    ])
-
-    pi = pigpio.pi()
-
-    try:
-        pi.set_mode(IR_TX, pigpio.OUTPUT)
-        pi.write(IR_TX, 0)
-
-        # 10 short carrier bursts
-        wave = []
-        for _ in range(10):
-            wave.extend(carrier_wave_pulses(IR_TX, 50000))
-            wave.append(pigpio.pulse(0, 1 << IR_TX, 50000))
-
-        pi.wave_clear()
-        pi.wave_add_generic(wave)
-        wid = pi.wave_create()
-
-        pi.wave_send_once(wid)
-        while pi.wave_tx_busy():
-            time.sleep(0.001)
-
-        pi.wave_delete(wid)
-
-        D.show_message("IR LED Test", [
-            "Test complete",
-            "Camera should see",
-            "purple/white blink",
-            "Press A"
-        ], color="GREEN")
-        wait_back()
-
-    except Exception as e:
-        show_error("LED Test Error", e)
-
-    finally:
-        try:
-            pi.write(IR_TX, 0)
-            pi.stop()
-        except Exception:
-            pass
-
-
-def view_code_info(name):
-    db = load_db()
-    code = db.get(name)
-
-    if not code:
-        D.show_message("IR Info", ["Code not found", "Press A"], color="RED")
-        wait_back()
-        return
-
-    pulses = code.get("pulses", [])
-    lines = [
-        name[:20],
-        f"Pulses: {len(pulses)}",
-        f"Len: {total_duration_ms(pulses)}ms",
-        f"Carrier: {code.get('carrier_hz', CARRIER_HZ)}",
-        "Press A",
-    ]
-
-    D.show_message("IR Info", lines)
-    wait_back()
-
-
 def run():
     ensure_db()
 
     selected = 0
+    per_page = 6
 
     while True:
         db = load_db()
@@ -444,7 +497,10 @@ def run():
         if selected >= len(items):
             selected = 0
 
-        D.draw_screen("IR Remote", items, selected)
+        start = (selected // per_page) * per_page
+        visible = items[start:start + per_page]
+
+        D.draw_screen("IR Remote", visible, selected - start)
         key = D.wait_key()
 
         if key == "up":
@@ -469,4 +525,4 @@ def run():
                 test_ir_led()
 
             else:
-                send_menu(chosen)
+                code_action_menu(chosen)
