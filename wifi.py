@@ -144,8 +144,38 @@ def parse_network_block(mac, block):
 
 def scan_networks():
     D.show_message("WiFi", ["Scanning...", "Please wait"])
-    raw = run_cmd("sudo iw dev wlan0 scan")
-    return parse_iw_scan(raw)
+    raw = run_cmd("nmcli -t -f SSID,BSSID,CHAN,SIGNAL,SECURITY dev wifi list")
+    networks = []
+
+    for line in raw.splitlines():
+        parts = line.split(":")
+        if len(parts) < 5:
+            continue
+
+        ssid = parts[0] if parts[0] else "Hidden"
+        mac = parts[1]
+        channel = parts[2]
+        signal_pct = parts[3]
+        security = parts[4] if parts[4] else "Open"
+
+        try:
+            signal = int(signal_pct)
+        except Exception:
+            signal = 0
+
+        networks.append({
+            "ssid": ssid,
+            "mac": mac,
+            "signal": signal,
+            "quality": f"{signal_pct}%",
+            "freq": 0,
+            "channel": channel,
+            "band": "2.4/5GHz",
+            "security": security,
+            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+
+    return sorted(networks, key=lambda x: x["signal"], reverse=True)
 
 
 def wait_back():
