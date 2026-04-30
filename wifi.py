@@ -145,7 +145,7 @@ def parse_network_block(mac, block):
 def scan_networks():
     D.show_message("WiFi", ["Scanning...", "Please wait"])
 
-    raw = run_cmd("nmcli -t --separator '|' -f SSID,BSSID,CHAN,SIGNAL,SECURITY dev wifi list")
+    raw = run_cmd("nmcli -t -f SSID,BSSID,CHAN,SIGNAL,SECURITY dev wifi list --separator '|'")
     networks = []
 
     for line in raw.splitlines():
