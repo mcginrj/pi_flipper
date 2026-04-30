@@ -10,7 +10,45 @@ LOG_FILE = os.path.join(LOG_DIR, "wifi_scans.json")
 
 
 def run_cmd(cmd):
-    return subprocess.getoutput(cmd)
+    try:
+        return subprocess.getoutput(cmd)
+    except Exception:
+        return ""
+
+
+def wait_back():
+    while True:
+        key = D.wait_key()
+        if key in ["back", "select", "shutdown"]:
+            return key
+
+
+def signal_rating_percent(signal):
+    try:
+        s = int(signal)
+        if s >= 80:
+            return "Excellent"
+        if s >= 60:
+            return "Good"
+        if s >= 40:
+            return "Fair"
+        return "Weak"
+    except Exception:
+        return "?"
+
+
+def signal_rating_dbm(signal):
+    try:
+        s = int(float(signal))
+        if s >= -50:
+            return "Excellent"
+        if s >= -65:
+            return "Good"
+        if s >= -75:
+            return "Fair"
+        return "Weak"
+    except Exception:
+        return "?"
 
 
 def freq_to_channel(freq):
@@ -39,21 +77,19 @@ def freq_to_band(freq):
         return "?"
 
 
-def signal_rating(signal):
+def channel_to_band(channel):
     try:
-        s = int(float(signal))
-        if s >= -50:
-            return "Excellent"
-        if s >= -65:
-            return "Good"
-        if s >= -75:
-            return "Fair"
-        return "Weak"
+        ch = int(channel)
+        if 1 <= ch <= 14:
+            return "2.4GHz"
+        if ch >= 32:
+            return "5GHz"
     except Exception:
-        return "?"
+        pass
+    return "?"
 
 
-def parse_security(block):
+def parse_security_iw(block):
     text = "\n".join(block)
 
     if "capability:" in text and "Privacy" not in text:
@@ -74,40 +110,89 @@ def parse_security(block):
     return "Unknown"
 
 
-def parse_iw_scan(raw):
+def parse_nmcli_multiline(raw):
+    """
+    Parses:
+    SSID:MyWifi
+    BSSID:AA:BB:CC:DD:EE:FF
+    CHAN:6
+    SIGNAL:82
+    SECURITY:WPA2
+
+    This avoids the MAC-address-colon problem.
+    """
     networks = []
-    current = []
-    mac = None
+    current = {}
 
     for line in raw.splitlines():
         line = line.rstrip()
 
-        if line.startswith("BSS "):
-            if current and mac:
-                networks.append(parse_network_block(mac, current))
-            current = [line]
-            parts = line.split()
-            mac = parts[1] if len(parts) > 1 else "?"
-        else:
-            if current is not None:
-                current.append(line)
+        if not line.strip():
+            if current:
+                networks.append(current)
+                current = {}
+            continue
 
-    if current and mac:
-        networks.append(parse_network_block(mac, current))
+        if ":" not in line:
+            continue
+
+        key, value = line.split(":", 1)
+        key = key.strip().upper()
+        value = value.strip()
+
+        if key == "SSID":
+            current["ssid"] = value if value else "Hidden"
+        elif key == "BSSID":
+            current["mac"] = value
+        elif key == "CHAN":
+            current["channel"] = value
+        elif key == "SIGNAL":
+            current["signal"] = value
+        elif key == "SECURITY":
+            current["security"] = value if value else "Open"
+
+    if current:
+        networks.append(current)
 
     clean = []
     seen = set()
 
     for n in networks:
-        key = n["mac"]
-        if key not in seen:
-            clean.append(n)
-            seen.add(key)
+        ssid = n.get("ssid", "Hidden")
+        mac = n.get("mac", "?")
+        channel = n.get("channel", "?")
+        signal_raw = n.get("signal", "0")
+        security = n.get("security", "Unknown")
+
+        try:
+            signal = int(signal_raw)
+        except Exception:
+            signal = 0
+
+        key = mac if mac != "?" else ssid + channel
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+
+        clean.append({
+            "ssid": ssid,
+            "mac": mac,
+            "signal": signal,
+            "signal_unit": "%",
+            "quality": signal_rating_percent(signal),
+            "freq": 0,
+            "channel": channel,
+            "band": channel_to_band(channel),
+            "security": security,
+            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        })
 
     return sorted(clean, key=lambda x: x["signal"], reverse=True)
 
 
-def parse_network_block(mac, block):
+def parse_iw_network_block(mac, block):
     ssid = "Hidden"
     signal = -999
     freq = 0
@@ -133,68 +218,83 @@ def parse_network_block(mac, block):
         "ssid": ssid,
         "mac": mac,
         "signal": signal,
-        "quality": signal_rating(signal),
+        "signal_unit": "dBm",
+        "quality": signal_rating_dbm(signal),
         "freq": freq,
         "channel": freq_to_channel(freq),
         "band": freq_to_band(freq),
-        "security": parse_security(block),
+        "security": parse_security_iw(block),
         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+
+
+def parse_iw_scan(raw):
+    networks = []
+    current = []
+    mac = None
+
+    for line in raw.splitlines():
+        line = line.rstrip()
+
+        if line.startswith("BSS "):
+            if current and mac:
+                networks.append(parse_iw_network_block(mac, current))
+
+            current = [line]
+            parts = line.split()
+            mac = parts[1] if len(parts) > 1 else "?"
+        else:
+            if current is not None:
+                current.append(line)
+
+    if current and mac:
+        networks.append(parse_iw_network_block(mac, current))
+
+    clean = []
+    seen = set()
+
+    for n in networks:
+        key = n["mac"]
+        if key not in seen:
+            clean.append(n)
+            seen.add(key)
+
+    return sorted(clean, key=lambda x: x["signal"], reverse=True)
 
 
 def scan_networks():
     D.show_message("WiFi", ["Scanning...", "Please wait"])
 
-    raw = run_cmd("nmcli -t -f SSID,BSSID,CHAN,SIGNAL,SECURITY dev wifi list --separator '|'")
-    networks = []
+    # Ask NetworkManager to refresh first.
+    run_cmd("nmcli dev wifi rescan")
 
-    for line in raw.splitlines():
-        parts = line.split("|")
+    # Use multiline mode so BSSID colons do not break parsing.
+    raw = run_cmd("nmcli -m multiline -f SSID,BSSID,CHAN,SIGNAL,SECURITY dev wifi list")
 
-        if len(parts) < 5:
-            continue
+    networks = parse_nmcli_multiline(raw)
 
-        ssid = parts[0].strip() if parts[0].strip() else "Hidden"
-        mac = parts[1].strip()
-        channel = parts[2].strip()
-        signal_pct = parts[3].strip()
-        security = parts[4].strip() if parts[4].strip() else "Open"
+    if networks:
+        return networks
 
-        try:
-            signal = int(signal_pct)
-        except Exception:
-            signal = 0
+    # Fallback to iw if nmcli returns nothing.
+    raw = run_cmd("sudo iw dev wlan0 scan")
+    networks = parse_iw_scan(raw)
 
-        networks.append({
-            "ssid": ssid,
-            "mac": mac,
-            "signal": signal,
-            "quality": f"{signal_pct}%",
-            "freq": 0,
-            "channel": channel,
-            "band": "2.4/5GHz",
-            "security": security,
-            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-        })
-
-    return sorted(networks, key=lambda x: x["signal"], reverse=True)
-
-def wait_back():
-    while True:
-        key = D.wait_key()
-        if key in ["back", "select", "shutdown"]:
-            return key
+    return networks
 
 
 def show_network_detail(n):
+    signal_unit = n.get("signal_unit", "%")
+    signal = n.get("signal", "?")
+
     D.show_message("WiFi Detail", [
-        f"SSID: {n['ssid'][:20]}",
-        f"Sig: {n['signal']}%",
-        f"Rate: {n['quality']}",
-        f"Ch: {n['channel']} {n['band']}",
-        f"Sec: {n['security']}",
-        f"MAC: {n['mac'][:17]}",
-        "Press A to go back",
+        f"SSID: {str(n.get('ssid', 'Hidden'))[:20]}",
+        f"Sig: {signal}{signal_unit}",
+        f"Rate: {n.get('quality', '?')}",
+        f"Ch: {n.get('channel', '?')} {n.get('band', '?')}",
+        f"Sec: {str(n.get('security', '?'))[:20]}",
+        f"MAC: {str(n.get('mac', '?'))[:17]}",
+        "Press A"
     ])
     wait_back()
 
@@ -204,16 +304,18 @@ def connected_info():
     ip = run_cmd("hostname -I").strip()
     route = run_cmd("ip route | grep default")
 
-    ssid = "Not connected"
+    ssid = run_cmd("iwgetid -r").strip()
+    if not ssid:
+        ssid = "Not connected"
+
     signal = "?"
-    gateway = "?"
 
     for line in link.splitlines():
         line = line.strip()
-        if line.startswith("SSID:"):
-            ssid = line.replace("SSID:", "").strip()
-        elif line.startswith("signal:"):
+        if line.startswith("signal:"):
             signal = line.replace("signal:", "").strip()
+
+    gateway = "?"
 
     if route:
         parts = route.split()
@@ -225,36 +327,44 @@ def connected_info():
         f"IP: {ip[:22] if ip else 'None'}",
         f"Gateway: {gateway}",
         f"Signal: {signal}",
-        "Press A to go back",
+        "Press A"
     ])
     wait_back()
 
 
 def channel_summary(networks):
     if not networks:
-        D.show_message("Channels", ["No scan data", "Run scan first"])
+        D.show_message("Channels", ["No scan data", "Run scan first", "Press A"])
         wait_back()
         return
 
     counts = {}
+
     for n in networks:
-        ch = n["channel"]
-        if ch:
+        ch = str(n.get("channel", "?"))
+        if ch and ch != "?":
             counts[ch] = counts.get(ch, 0) + 1
 
     if not counts:
-        D.show_message("Channels", ["No channels found"])
+        D.show_message("Channels", ["No channels found", "Press A"])
         wait_back()
         return
 
-    items = sorted(counts.items(), key=lambda x: x[0])
-    lines = [f"Ch {ch}: {count} nets" for ch, count in items[:8]]
+    def sort_key(item):
+        try:
+            return int(item[0])
+        except Exception:
+            return 999
+
+    items = sorted(counts.items(), key=sort_key)
+
+    lines = [f"Ch {ch}: {count} nets" for ch, count in items[:7]]
 
     best = min(items, key=lambda x: x[1])
     lines.append(f"Best: Ch {best[0]}")
-    lines.append("Press A to go back")
+    lines.append("Press A")
 
-    D.show_message("Channels", lines)
+    D.show_message("Channels", lines[:9])
     wait_back()
 
 
@@ -268,6 +378,7 @@ def save_scan(networks):
     }
 
     old = []
+
     if os.path.exists(LOG_FILE):
         try:
             with open(LOG_FILE, "r") as f:
@@ -284,14 +395,14 @@ def save_scan(networks):
         f"{len(networks)} networks",
         "Saved to logs/",
         "wifi_scans.json",
-        "Press A to go back",
+        "Press A"
     ])
     wait_back()
 
 
 def network_list(networks):
     if not networks:
-        D.show_message("WiFi", ["No networks found", "Press A to go back"])
+        D.show_message("WiFi", ["No networks found", "Press A"])
         wait_back()
         return
 
@@ -303,13 +414,20 @@ def network_list(networks):
         end = start + per_page
         visible = networks[start:end]
 
+        page = (selected // per_page) + 1
+        total_pages = ((len(networks) - 1) // per_page) + 1
+
         labels = []
 
         for n in visible:
-            ssid = n["ssid"][:12] if n["ssid"] else "Hidden"
-            labels.append(f"{ssid} {n['signal']} Ch{n['channel']}")
+            ssid = str(n.get("ssid", "Hidden"))[:10]
+            signal = n.get("signal", "?")
+            unit = n.get("signal_unit", "%")
+            ch = n.get("channel", "?")
 
-        D.draw_screen("Networks", labels, selected - start)
+            labels.append(f"{ssid} {signal}{unit} Ch{ch}")
+
+        D.draw_screen(f"Networks {page}/{total_pages}", labels, selected - start)
 
         key = D.wait_key()
 
@@ -361,7 +479,7 @@ def run():
                     networks = scan_networks()
                     network_list(networks)
                 except Exception as e:
-                    D.show_message("WiFi Error", [str(e)[:28], "Press A"])
+                    D.show_message("WiFi Error", [str(e)[:28], "Press A"], color="RED")
                     wait_back()
 
             elif choice == "Connected Info":
