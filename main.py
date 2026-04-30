@@ -15,16 +15,50 @@ MAIN_MENU = [
 
 def system_info():
     import subprocess
-    temp  = subprocess.getoutput("vcgencmd measure_temp").replace("temp=","")
-    uptime = subprocess.getoutput("uptime -p")
-    bat   = B.get_battery()
+    import time
+    import os
+
+    def cmd(command):
+        try:
+            return subprocess.getoutput(command).strip()
+        except Exception:
+            return "N/A"
+
+    # CPU temperature
+    temp_raw = cmd("vcgencmd measure_temp")
+    temp = temp_raw.replace("temp=", "") if temp_raw else "N/A"
+
+    # Uptime
+    uptime = cmd("uptime -p").replace("up ", "")
+
+    # IP address
+    ip = cmd("hostname -I").split()
+    ip = ip[0] if ip else "No IP"
+
+    # Connected SSID
+    ssid = cmd("iwgetid -r")
+    ssid = ssid if ssid else "Not connected"
+
+    # Disk usage
+    disk = cmd("df -h / | awk 'NR==2 {print $5 \" used\"}'")
+    disk = disk if disk else "N/A"
+
+    # Memory usage
+    mem = cmd("free -h | awk '/Mem:/ {print $3 \"/\" $2}'")
+    mem = mem if mem else "N/A"
+
     D.show_message("System Info", [
         f"Temp: {temp}",
-        f"Uptime: {uptime}",
-        f"Battery: {bat}%",
-        "",
-        "Press A to go back",
+        f"Uptime: {uptime[:18]}",
+        f"IP: {ip}",
+        f"SSID: {ssid[:18]}",
+        f"Disk: {disk}",
+        f"RAM: {mem}",
+        "Power: PiSugar S",
+        "Battery: N/A",
+        "Press A"
     ])
+
     D.wait_key()
 
 def shutdown_confirm():
