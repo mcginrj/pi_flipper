@@ -111,16 +111,7 @@ def parse_security_iw(block):
 
 
 def parse_nmcli_multiline(raw):
-    """
-    Parses:
-    SSID:MyWifi
-    BSSID:AA:BB:CC:DD:EE:FF
-    CHAN:6
-    SIGNAL:82
-    SECURITY:WPA2
-
-    This avoids the MAC-address-colon problem.
-    """
+    
     networks = []
     current = {}
 
@@ -139,6 +130,10 @@ def parse_nmcli_multiline(raw):
         key, value = line.split(":", 1)
         key = key.strip().upper()
         value = value.strip()
+
+        if key == "SSID" and current:
+            networks.append(current)
+            current = {}
 
         if key == "SSID":
             current["ssid"] = value if value else "Hidden"
@@ -265,10 +260,8 @@ def parse_iw_scan(raw):
 def scan_networks():
     D.show_message("WiFi", ["Scanning...", "Please wait"])
 
-    # Ask NetworkManager to refresh first.
     run_cmd("nmcli dev wifi rescan")
 
-    # Use multiline mode so BSSID colons do not break parsing.
     raw = run_cmd("nmcli -m multiline -f SSID,BSSID,CHAN,SIGNAL,SECURITY dev wifi list")
 
     networks = parse_nmcli_multiline(raw)
@@ -276,7 +269,6 @@ def scan_networks():
     if networks:
         return networks
 
-    # Fallback to iw if nmcli returns nothing.
     raw = run_cmd("sudo iw dev wlan0 scan")
     networks = parse_iw_scan(raw)
 
