@@ -125,7 +125,11 @@ def main():
         start = (selected // per_page) * per_page
         visible_menu = MAIN_MENU[start:start + per_page]
 
+        page = (selected // per_page) + 1
+        total_pages = ((len(MAIN_MENU) - 1) // per_page) + 1
+
         labels = [label for label, _ in visible_menu]
+        labels.append(f"Page {page}/{total_pages}")
 
         bat = -1
 
